@@ -1,0 +1,23 @@
+syntax = "proto3";
+package transaction_verification;
+
+service TransactionVerification {
+  rpc VerifyTransaction (OrderRequest) returns (OrderResponse) {}
+}
+
+message OrderRequest {
+  string user_name = 1;
+  string card_number = 2;
+  repeated Item items = 3;
+  string cvv = 4;
+  string expirationDate = 5;
+}
+
+message Item {
+  string name = 1;
+  int32 quantity = 2;
+}
+
+message OrderResponse {
+  bool is_valid = 1;
+}

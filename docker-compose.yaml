@@ -61,6 +61,9 @@ services:
       - ./utils:/app/utils
       # Mount the fraud_detection/src directory in the current directory to the /app/fraud_detection/src directory in the container
       - ./fraud_detection/src:/app/fraud_detection/src
+      - ./fraud_detection/.env:/app/fraud_detection/.env
+    env_file:
+      - ./fraud_detection/.env
   
   transaction_verification:
     build:
@@ -84,8 +87,9 @@ services:
     environment:
       - PYTHONUNBUFFERED=TRUE
       - PYTHONFILE=/app/suggestions/src/app.py
-      - OPENAI_API_KEY=REDACTED<==WFDPw7htq_vtrudgXQmA0SFCWiwgFt4wg3x5EEHJ5vLbovzwmYp0vjHCQt6Szfvl8jVP24SmzoT3BlbkFJfjPJBu2QVAcB0L5Xa5SY3awg8sdg1GyE9L2JYvOpMH19pfF6PopNGTsEFJuBaqd08yhjDFcUoA
     volumes:
       - ./utils:/app/utils
       - ./suggestions/src:/app/suggestions/src
-      - ./fraud_detection/src:/app/fraud_detection/src
+      - ./suggestions/.env:/app/suggestions/.env
+    env_file:
+      - ./suggestions/.env

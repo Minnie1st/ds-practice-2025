@@ -2,8 +2,18 @@ import sys
 import os
 import grpc
 from concurrent import futures
-import openai
-import os
+import google.generativeai as genai
+import json
+from dotenv import load_dotenv
+import re
+import uuid
+import logging
+
+# 配置日志记录
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+load_dotenv()
 
 FILE = __file__ if '__file__' in globals() else os.getenv("PYTHONFILE", "")
 suggestions_grpc_path = os.path.abspath(os.path.join(FILE, '../../../utils/pb/suggestions'))
@@ -15,51 +25,80 @@ import suggestions_pb2_grpc as suggestions_grpc
 
 class SuggestionsServicer(suggestions_grpc.SuggestionsServicer):
     def GetSuggestions(self, request, context):
-        # 设置 OpenAI API 密钥（从环境变量读取）
-        openai.api_key = os.getenv("OPENAI_API_KEY", "REDACTED<==WFDPw7htq_vtrudgXQmA0SFCWiwgFt4wg3x5EEHJ5vLbovzwmYp0vjHCQt6Szfvl8jVP24SmzoT3BlbkFJfjPJBu2QVAcB0L5Xa5SY3awg8sdg1GyE9L2JYvOpMH19pfF6PopNGTsEFJuBaqd08yhjDFcUoA")
+        # 设置 API 密钥（从环境变量读取）
+        logger.info("Received Suggestion request from user: %s", request.user_name)
+        genai.configure(api_key=os.getenv("GOOGLE_API_KEY", ""))
         
         # 构建提示（Prompt），基于用户订单生成推荐
-        prompt = f"用户 {request.user_name} 购买了以下书籍："
+        prompt = f"User {request.user_name} purchased the following books (no genre specified):"
         for item in request.items:
-            prompt += f"\n- {item.name}（数量：{item.quantity}）"
-        prompt += "\n请推荐3本相关书籍，包括书名和作者，用JSON格式返回，例如：[['书名1', '作者1'], ['书名2', '作者2'], ['书名3', '作者3']]"
-
+            prompt += f"\n- {item.name} (Quantity: {item.quantity})"
+        prompt += """
+        First, infer the most likely genre for each book based on its name. Then, recommend 3 related books, including the title and author, in strict JSON format, 
+        - The output must be a flat list of 3 books in the format: [['Book1', 'Author1'], ['Book2', 'Author2'], ['Book3', 'Author3']]
+        - Example output:
+        ```json
+        [['The Hobbit', 'J.R.R. Tolkien'], ['Dune', 'Frank Herbert'], ['1984', 'George Orwell']]
+        ```"""
+        
         try:
-            # 调用 ChatGPT API（使用 gpt-3.5-turbo 模型）
-            response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=150
-            )
+            # 使用 Gemini 2.0 Flash 模型生成内容
+            logger.info("Calling Gemini API for fraud Suggestion")
+            model = genai.GenerativeModel("gemini-2.0-flash")
+            response = model.generate_content(prompt)
+            logger.info(f"🔍 Gemini API Raw Response: {response.text}")  # 打印原始响应内容
             
-            # 解析 ChatGPT 返回的 JSON 字符串
-            books_json = response.choices[0].message['content'].strip()
-            # 假设 ChatGPT 返回类似 "[['Python进阶', '王五'], ['算法入门', '李四'], ['数据科学', '张三']]"
-            books_list = eval(books_json)  # 简单解析（注意安全，生产环境用 json.loads）
+            
+            # 确保 response.text 可用（处理可能的 None 或异常）
+            if not response.text or not response.text.strip():
+                raise ValueError("Received empty response from Gemini API")
+            
+            json_match = re.search(r"```json\s*([\s\S]*?)\s*```", response.text, re.DOTALL)
+            if json_match:
+                books_json = json_match.group(1).strip()  # 提取 JSON 内容
+            else:
+                # 如果没有找到代码块，尝试直接查找可能的 JSON 部分
+                books_json = re.sub(r"[^$$  $$\{\},:\"'\w\s-]", "", response.text.strip())
+                # 进一步清理，确保只保留 JSON 相关字符
+                books_json = re.sub(r"\s+", " ", books_json).strip()
+
+            # 进一步检查 books_json 是否是有效的 JSON
+            try:
+                books_list = json.loads(books_json)
+            except json.JSONDecodeError as e:
+                logger.info(f"Error decoding JSON: {e}")
+                # 如果解析失败，使用默认书单
+                books_list = []
+
+            # 如果 books_list 为空，使用默认推荐
+            if not books_list:
+                logger.info("No valid book recommendations found, returning defaults.")
+                books_list = [
+                    ["Python Crash Course", "Eric Matthes"],
+                    ["Introduction to Algorithms", "Thomas H. Cormen"]
+                ]
 
             # 转换为 protobuf 格式的书籍列表
             suggested_books = [
-                suggestions.Book(
-                    book_id=f"book_{i}",  # 简单生成 ID
+                suggestions.Book( 
                     title=book[0],
                     author=book[1]
                 )
-                for i, book in enumerate(books_list, 1)
+                for i, book in enumerate (books_list)
             ]
             
             return suggestions.OrderResponse(suggested_books=suggested_books[:3])
 
         except Exception as e:
-            print(f"Error calling OpenAI API: {e}")
-            # 如果 API 调用失败，返回默认推荐
+            logger.info(f"Error calling Gemini API: {e}")
+            # 如果出现其他错误，返回默认推荐
             default_books = [
-                suggestions.Book(book_id="123", title="Python进阶", author="王五"),
-                suggestions.Book(book_id="456", title="算法入门", author="李四")
+                suggestions.Book(title="Python Crash Course", author="Eric Matthes"),
+                suggestions.Book(title="Introduction to Algorithms", author="Thomas H. Cormen")
             ]
-            return suggestions.OrderResponse(suggested_books=default_books)
 
+            return suggestions.OrderResponse(suggested_books=default_books)
+        
 def serve():
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
     suggestions_grpc.add_SuggestionsServicer_to_server(
