@@ -1,0 +1,34 @@
+syntax = "proto3";
+package order_queue;
+
+service OrderQueue {
+    rpc Enqueue (EnqueueRequest) returns (EnqueueResponse) {}
+    rpc Dequeue (DequeueRequest) returns (DequeueResponse) {}
+}
+
+message EnqueueRequest {
+    string order_id = 1;
+    string user_name = 2;
+    repeated Item items = 3;
+    string shipping_method = 4;
+}
+
+message Item {
+    string name = 1;
+    int32 quantity = 2;
+}
+
+message EnqueueResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+message DequeueRequest {}
+
+message DequeueResponse {
+    bool success = 1;
+    string message = 2;
+    string order_id = 3;
+    string user_name = 4;
+    repeated Item items = 5;
+}

@@ -13,6 +13,10 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# 全局缓存
+order_data_cache = {}  # 存订单数据
+vector_clocks = {}     # 存向量时钟
+
 load_dotenv()
 
 FILE = __file__ if '__file__' in globals() else os.getenv("PYTHONFILE", "")
@@ -24,9 +28,31 @@ import suggestions_pb2_grpc as suggestions_grpc
 
 
 class SuggestionsServicer(suggestions_grpc.SuggestionsServicer):
+    def CacheOrder(self, request, context):
+        order_id = request.order_id
+        vc = list(request.vector_clock)
+        vc[2] += 1  # suggestions 是第2个位置（从0开始计数），加1
+
+        order_data_cache[order_id] = {
+            'user_name': request.user_name,
+            'items': [{'name': item.name, 'quantity': item.quantity} for item in request.items]
+        }
+        vector_clocks[order_id] = [0, 0, 0]
+        print(f"Suggestions: Cached OrderID {order_id}, Vector Clock {vector_clocks[order_id]}")
+        return suggestions.OrderResponse(
+            success=True,
+            message="Order cached",
+            vector_clock=vector_clocks[order_id]
+        )
+    
     def GetSuggestions(self, request, context):
+        order_id = request.order_id
+        vc = list(request.vector_clock)  # 从请求拿向量时钟
+        vc[2] += 1  # suggestions 是第2个位置（从0开始），加1
+        vector_clocks[order_id] = vc  # 更新全局向量时钟
+
+        logger.info(f"Event GetSuggestions: Received GenerateSuggestions for OrderID {order_id}, Vector Clock {vc}")
         # 设置 API 密钥（从环境变量读取）
-        logger.info("Received Suggestion request from user: %s", request.user_name)
         genai.configure(api_key=os.getenv("GOOGLE_API_KEY", ""))
         
         # 构建提示（Prompt），基于用户订单生成推荐
@@ -40,16 +66,18 @@ class SuggestionsServicer(suggestions_grpc.SuggestionsServicer):
         ```json
         [['The Hobbit', 'J.R.R. Tolkien'], ['Dune', 'Frank Herbert'], ['1984', 'George Orwell']]
         ```"""
+        print(prompt)
+        logger.info(f"Received items: {[(item.name, item.quantity) for item in request.items]}")
         
         try:
-            # 使用 Gemini 2.0 Flash 模型生成内容
-            logger.info("Calling Gemini API for fraud Suggestion")
+            #  Gemini 2.0 Flash 
+            logger.info("Calling Gemini API for Suggestion")
             model = genai.GenerativeModel("gemini-2.0-flash")
             response = model.generate_content(prompt)
-            logger.info(f"🔍 Gemini API Raw Response: {response.text}")  # 打印原始响应内容
+            logger.info(f"🔍 Gemini API Raw Response: {response.text}")
             
             
-            # 确保 response.text 可用（处理可能的 None 或异常）
+            #  response.text 可用（处理可能的 None 或异常）
             if not response.text or not response.text.strip():
                 raise ValueError("Received empty response from Gemini API")
             
@@ -87,17 +115,51 @@ class SuggestionsServicer(suggestions_grpc.SuggestionsServicer):
                 for i, book in enumerate (books_list)
             ]
             
-            return suggestions.OrderResponse(suggested_books=suggested_books[:3])
+            logger.info(f"Event f: OrderID {order_id}, Generated {len(suggested_books)} suggestions, Vector Clock {vc}")
+            return suggestions.OrderResponse(
+                success=True,
+                message="Suggestions generated",
+                suggested_books=suggested_books[:3],  # 最多3本
+                vector_clock=vc
+            )
 
         except Exception as e:
-            logger.info(f"Error calling Gemini API: {e}")
-            # 如果出现其他错误，返回默认推荐
+            logger.error(f"Error calling Gemini API: {e}")
             default_books = [
                 suggestions.Book(title="Python Crash Course", author="Eric Matthes"),
                 suggestions.Book(title="Introduction to Algorithms", author="Thomas H. Cormen")
             ]
+            return suggestions.OrderResponse(
+                success=False,
+                message=f"Failed to generate suggestions: {str(e)}",
+                suggested_books=default_books,
+                vector_clock=vc
+            )
+    
+    def ClearOrder(self, request, context):
+        order_id = request.order_id
+        final_vc = list(request.final_vector_clock)  # VCf
+        local_vc = vector_clocks.get(order_id, [0, 0, 0])  # 本地 VC
 
-            return suggestions.OrderResponse(suggested_books=default_books)
+        # 检查 VC <= VCf
+        is_valid = all(local_vc[i] <= final_vc[i] for i in range(len(local_vc)))
+        if is_valid:
+            # 清理数据
+            if order_id in order_data_cache:
+                del order_data_cache[order_id]
+            if order_id in vector_clocks:
+                del vector_clocks[order_id]
+            print(f"Suggestions: Cleared OrderID {order_id}, Local VC {local_vc}, Final VC {final_vc}")
+            return suggestions.ClearResponse(
+                success=True,
+                message="Order data cleared"
+            )
+        else:
+            print(f"Suggestions: Error for OrderID {order_id}, Local VC {local_vc} > Final VC {final_vc}")
+            return suggestions.ClearResponse(
+                success=False,
+                message="Vector clock mismatch"
+            )
         
 def serve():
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))

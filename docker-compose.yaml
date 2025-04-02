@@ -38,6 +38,9 @@ services:
       - fraud_detection
       - transaction_verification
       - suggestions
+      - order_queue
+    networks:
+    - app-network  
 
   fraud_detection:
     build:
@@ -64,6 +67,8 @@ services:
       - ./fraud_detection/.env:/app/fraud_detection/.env
     env_file:
       - ./fraud_detection/.env
+    networks:
+    - app-network  
   
   transaction_verification:
     build:
@@ -77,6 +82,8 @@ services:
     volumes:
       - ./utils:/app/utils
       - ./transaction_verification/src:/app/transaction_verification/src
+    networks:
+    - app-network  
 
   suggestions:
     build:
@@ -93,3 +100,84 @@ services:
       - ./suggestions/.env:/app/suggestions/.env
     env_file:
       - ./suggestions/.env
+    networks:
+    - app-network  
+
+  order_queue:
+    build:
+      context: .  # 根目录
+      dockerfile: order_queue/Dockerfile
+    ports:
+      - "50054:50054"
+    environment:
+      - PYTHONUNBUFFERED=TRUE  # 确保日志实时输出
+      - PYTHONFILE=/app/order_queue/src/app.py  # 指定入口文件
+      # - GEMINI_API_KEY=your-api-key-here  # 可选：直接设置密钥（不推荐）
+    volumes:
+      - ./utils:/app/utils  # 挂载 gRPC 文件
+      - ./order_queue/src:/app/order_queue/src  # 挂载源码
+      - ./order_queue/.env:/app/order_queue/.env  # 挂载 .env 文件
+    env_file:
+      - ./order_queue/.env  # 加载环境变量
+    networks:
+      - app-network
+
+  order_executor_1:
+    depends_on:
+      - order_queue
+    build:
+      context: .
+      dockerfile: order_executor/Dockerfile
+    environment:
+      - REPLICA_ID=1
+      - PORT=50055
+    ports:
+      - "50055:50055"
+    networks:
+      - app-network
+
+  order_executor_2:
+    depends_on:
+      - order_queue
+    build:
+      context: .
+      dockerfile: order_executor/Dockerfile
+    environment:
+      - REPLICA_ID=2
+      - PORT=50056
+    ports:
+      - "50056:50056"
+    networks:
+      - app-network
+
+  order_executor_3:
+    depends_on:
+      - order_queue
+    build:
+      context: .
+      dockerfile: order_executor/Dockerfile
+    environment:
+      - REPLICA_ID=3
+      - PORT=50057
+    ports:
+      - "50057:50057"
+    networks:
+      - app-network
+
+  order_executor_4:
+    depends_on:
+      - order_queue
+    build:
+      context: .
+      dockerfile: order_executor/Dockerfile
+    environment:
+      - REPLICA_ID=4
+      - PORT=50058
+    ports:
+      - "50058:50058"
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge

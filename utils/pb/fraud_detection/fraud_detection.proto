@@ -2,7 +2,10 @@ syntax = "proto3";
 package fraud_detection;
 
 service FraudDetection {
-  rpc CheckFraud (OrderRequest) returns (OrderResponse) {}
+  rpc CacheOrder (OrderRequest) returns (OrderResponse) {}  // 新加的缓存函数
+  rpc CheckUserFraud (OrderRequest) returns (OrderResponse) {}  // 新加：检查用户欺诈
+  rpc CheckCardFraud (OrderRequest) returns (OrderResponse) {}  // 新加：检查卡欺诈
+  rpc ClearOrder (ClearRequest) returns (ClearResponse) {}  // 新加的：清理数据
 }
 
 message OrderRequest {
@@ -19,6 +22,8 @@ message OrderRequest {
   string deviceLanguage = 11;
   string screenResolution = 12;
   string referrer = 13;
+  repeated int32 vector_clock = 14;
+  string order_id = 15;
 }
 
 message Item {
@@ -46,5 +51,17 @@ message Browser {
 }
 
 message OrderResponse {
-  bool is_fraudulent = 1;
+  bool success = 1;
+  string message = 2;
+  repeated int32 vector_clock = 3;
+}
+
+message ClearRequest {
+    string order_id = 1;
+    repeated int32 final_vector_clock = 2;  // VCf
+}
+
+message ClearResponse {
+    bool success = 1;
+    string message = 2;
 }

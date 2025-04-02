@@ -2,22 +2,50 @@ syntax = "proto3";
 package transaction_verification;
 
 service TransactionVerification {
-  rpc VerifyTransaction (OrderRequest) returns (OrderResponse) {}
+    rpc CacheOrder (OrderRequest) returns (OrderResponse) {}
+    rpc VerifyItemsNotEmpty (OrderRequest) returns (OrderResponse) {}
+    rpc VerifyUserDataComplete (OrderRequest) returns (OrderResponse) {}
+    rpc VerifyCreditCardFormat (OrderRequest) returns (OrderResponse) {}
+    rpc ClearOrder (ClearRequest) returns (ClearResponse) {}
 }
 
 message OrderRequest {
-  string user_name = 1;
-  string card_number = 2;
-  repeated Item items = 3;
-  string cvv = 4;
-  string expirationDate = 5;
+    string order_id = 1;
+    string user_name = 2;
+    string contact = 3;  // 新增
+    message BillingAddress {
+        string street = 1;
+        string city = 2;
+        string state = 3;
+        string zip = 4;
+        string country = 5;
+    }
+    BillingAddress billing_address = 4;  // 新增
+    string card_number = 5;
+    repeated Item items = 6;
+    string cvv = 7;
+    string expirationDate = 8;
+    repeated int32 vector_clock = 9;
 }
 
 message Item {
-  string name = 1;
-  int32 quantity = 2;
+    string name = 1;
+    int32 quantity = 2;
 }
 
 message OrderResponse {
-  bool is_valid = 1;
+    bool success = 1;
+    string message = 2;
+    repeated int32 vector_clock = 3;
+    repeated string reasons = 4;  // 新增，用于返回失败原因
+}
+
+message ClearRequest {
+    string order_id = 1;
+    repeated int32 final_vector_clock = 2;
+}
+
+message ClearResponse {
+    bool success = 1;
+    string message = 2;
 }

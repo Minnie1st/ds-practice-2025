@@ -14,7 +14,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1etransaction_verification.proto\x12\x18transaction_verification\"\x8a\x01\n\x0cOrderRequest\x12\x11\n\tuser_name\x18\x01 \x01(\t\x12\x13\n\x0b\x63\x61rd_number\x18\x02 \x01(\t\x12-\n\x05items\x18\x03 \x03(\x0b\x32\x1e.transaction_verification.Item\x12\x0b\n\x03\x63vv\x18\x04 \x01(\t\x12\x16\n\x0e\x65xpirationDate\x18\x05 \x01(\t\"&\n\x04Item\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x10\n\x08quantity\x18\x02 \x01(\x05\"!\n\rOrderResponse\x12\x10\n\x08is_valid\x18\x01 \x01(\x08\x32\x81\x01\n\x17TransactionVerification\x12\x66\n\x11VerifyTransaction\x12&.transaction_verification.OrderRequest\x1a\'.transaction_verification.OrderResponse\"\x00\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1etransaction_verification.proto\x12\x18transaction_verification\"\xf0\x02\n\x0cOrderRequest\x12\x10\n\x08order_id\x18\x01 \x01(\t\x12\x11\n\tuser_name\x18\x02 \x01(\t\x12\x0f\n\x07\x63ontact\x18\x03 \x01(\t\x12N\n\x0f\x62illing_address\x18\x04 \x01(\x0b\x32\x35.transaction_verification.OrderRequest.BillingAddress\x12\x13\n\x0b\x63\x61rd_number\x18\x05 \x01(\t\x12-\n\x05items\x18\x06 \x03(\x0b\x32\x1e.transaction_verification.Item\x12\x0b\n\x03\x63vv\x18\x07 \x01(\t\x12\x16\n\x0e\x65xpirationDate\x18\x08 \x01(\t\x12\x14\n\x0cvector_clock\x18\t \x03(\x05\x1a[\n\x0e\x42illingAddress\x12\x0e\n\x06street\x18\x01 \x01(\t\x12\x0c\n\x04\x63ity\x18\x02 \x01(\t\x12\r\n\x05state\x18\x03 \x01(\t\x12\x0b\n\x03zip\x18\x04 \x01(\t\x12\x0f\n\x07\x63ountry\x18\x05 \x01(\t\"&\n\x04Item\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x10\n\x08quantity\x18\x02 \x01(\x05\"X\n\rOrderResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x0f\n\x07message\x18\x02 \x01(\t\x12\x14\n\x0cvector_clock\x18\x03 \x03(\x05\x12\x0f\n\x07reasons\x18\x04 \x03(\t\"<\n\x0c\x43learRequest\x12\x10\n\x08order_id\x18\x01 \x01(\t\x12\x1a\n\x12\x66inal_vector_clock\x18\x02 \x03(\x05\"1\n\rClearResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x0f\n\x07message\x18\x02 \x01(\t2\x9f\x04\n\x17TransactionVerification\x12_\n\nCacheOrder\x12&.transaction_verification.OrderRequest\x1a\'.transaction_verification.OrderResponse\"\x00\x12h\n\x13VerifyItemsNotEmpty\x12&.transaction_verification.OrderRequest\x1a\'.transaction_verification.OrderResponse\"\x00\x12k\n\x16VerifyUserDataComplete\x12&.transaction_verification.OrderRequest\x1a\'.transaction_verification.OrderResponse\"\x00\x12k\n\x16VerifyCreditCardFormat\x12&.transaction_verification.OrderRequest\x1a\'.transaction_verification.OrderResponse\"\x00\x12_\n\nClearOrder\x12&.transaction_verification.ClearRequest\x1a\'.transaction_verification.ClearResponse\"\x00\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -22,11 +22,17 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'transaction_verification_pb
 if _descriptor._USE_C_DESCRIPTORS == False:
   DESCRIPTOR._options = None
   _globals['_ORDERREQUEST']._serialized_start=61
-  _globals['_ORDERREQUEST']._serialized_end=199
-  _globals['_ITEM']._serialized_start=201
-  _globals['_ITEM']._serialized_end=239
-  _globals['_ORDERRESPONSE']._serialized_start=241
-  _globals['_ORDERRESPONSE']._serialized_end=274
-  _globals['_TRANSACTIONVERIFICATION']._serialized_start=277
-  _globals['_TRANSACTIONVERIFICATION']._serialized_end=406
+  _globals['_ORDERREQUEST']._serialized_end=429
+  _globals['_ORDERREQUEST_BILLINGADDRESS']._serialized_start=338
+  _globals['_ORDERREQUEST_BILLINGADDRESS']._serialized_end=429
+  _globals['_ITEM']._serialized_start=431
+  _globals['_ITEM']._serialized_end=469
+  _globals['_ORDERRESPONSE']._serialized_start=471
+  _globals['_ORDERRESPONSE']._serialized_end=559
+  _globals['_CLEARREQUEST']._serialized_start=561
+  _globals['_CLEARREQUEST']._serialized_end=621
+  _globals['_CLEARRESPONSE']._serialized_start=623
+  _globals['_CLEARRESPONSE']._serialized_end=672
+  _globals['_TRANSACTIONVERIFICATION']._serialized_start=675
+  _globals['_TRANSACTIONVERIFICATION']._serialized_end=1218
 # @@protoc_insertion_point(module_scope)

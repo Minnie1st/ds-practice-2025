@@ -128,12 +128,18 @@
                     responseDiv.innerHTML = `
                         <strong>Order status: ${result.status}</strong><br>
                         Order ID: ${result.orderId}<br>
-                        ${result.status === "Order Approved" ?
-                            `Suggested Books:
-                            <ul class="list-disc pl-5 mt-2 space-y-1">${suggestedBooks}</ul>`
-                        : ``
-                        }
-                    `;
+                        ${result.status === "Order Approved" 
+                    ? `<div class="mt-2">
+                          <span class="font-medium">Suggested Books:</span>
+                          <ul class="list-disc pl-5 mt-1">${suggestedBooks}</ul>
+                       </div>`
+                    : result.status === "Order Rejected" 
+                        ? `<div class="mt-2 text-red-600">
+                              <span class="font-medium">Reason:</span> ${result.reason || 'Unknown error'}
+                           </div>`
+                        : ''
+                }
+            `;
                     color = result.status === 'Order Approved' ? 'green' : 'red';
                     responseDiv.className = `mt-6 p-4 border rounded-lg bg-${color}-100 text-${color}-700`;
                 } else {

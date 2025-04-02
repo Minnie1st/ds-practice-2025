@@ -1,0 +1,25 @@
+syntax = "proto3";
+package order_executor;
+
+service OrderExecutor {
+    rpc Ping (PingRequest) returns (PingResponse) {}  // 用于 Leader Election
+    rpc Heartbeat (HeartbeatMsg) returns (HeartbeatAck) {}  // 添加 Heartbeat 方法
+    
+}
+
+message PingRequest {
+    int32 replica_id = 1;
+}
+
+message PingResponse {
+    bool alive = 1;
+    int32 leader_id = 2;
+    double timestamp = 3;
+}
+
+message HeartbeatMsg {
+    int32 leader_id = 1;
+}
+
+message HeartbeatAck {
+}
