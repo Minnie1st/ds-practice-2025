@@ -120,7 +120,6 @@ class FraudDetectionServicer(fraud_detection_grpc.FraudDetectionServicer):
           }}
         - Provide clear reasons for your decision. Do not ignore the test card rules.
         """
-        print(prompt)
         try:
             logger.info("Calling Gemini API for Card Fraud Check, card=%s", masked_card)
             model = genai.GenerativeModel("gemini-2.0-flash")  

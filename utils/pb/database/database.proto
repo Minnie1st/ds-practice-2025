@@ -1,0 +1,131 @@
+syntax = "proto3";
+
+package database;
+
+// The Books Database service
+service BooksDatabase {
+  // Read the stock of a book
+  rpc Read (ReadRequest) returns (ReadResponse);
+
+  // Write the stock of a book
+  rpc Write (WriteRequest) returns (WriteResponse);
+
+  // Decrement the stock of a book 
+  rpc DecrementStock (DecrementStockRequest) returns (DecrementStockResponse);
+
+  // Increment the stock of a book
+  rpc IncrementStock(IncrementStockRequest) returns (IncrementStockResponse);
+
+  rpc SetStockThreshold (SetStockThresholdRequest) returns (SetStockThresholdResponse);
+  rpc CheckStockThreshold (CheckStockThresholdRequest) returns (CheckStockThresholdResponse);
+
+  // 2PC Operations
+  rpc Prepare (PrepareRequest) returns (PrepareResponse);
+  rpc Commit (CommitRequest) returns (CommitResponse);
+  rpc Abort (AbortRequest) returns (AbortResponse);
+  
+}
+
+// Request message for Read operation
+message ReadRequest {
+  string book_title = 1; // The title of the book to read
+}
+
+// Response message for Read operation
+message ReadResponse {
+  bool success = 1; // Whether the read operation was successful
+  string message = 2; // Success or error message
+  int32 stock = 3; // The current stock of the book
+  double price = 4; // The price of the book
+}
+
+// Request message for Write operation
+message WriteRequest {
+  string book_title = 1; // The title of the book to write
+  int32 stock = 2; // The new stock value
+  double price = 3; // The new price
+  int32 threshold = 4; // The stock threshold
+}
+
+// Response message for Write operation
+message WriteResponse {
+  bool success = 1; // Whether the write operation was successful
+  string message = 2; // Success or error message
+}
+
+// Request message for DecrementStock operation 
+message DecrementStockRequest {
+  string book_title = 1; // The title of the book
+  int32 quantity = 2; // The quantity to decrement
+}
+
+// Response message for DecrementStock operation 
+message DecrementStockResponse {
+  bool success = 1; // Whether the operation was successful
+  string message = 2; // Success or error message
+  int32 new_stock = 3; // The new stock value after decrement
+}
+
+message IncrementStockRequest {
+  string book_title = 1;
+  int32 quantity = 2;
+}
+
+message IncrementStockResponse {
+  bool success = 1;
+  string message = 2;
+  int32 new_stock = 3;
+}
+
+message SetStockThresholdRequest {
+  string book_title = 1;
+  int32 threshold  = 2;
+}
+
+message SetStockThresholdResponse {
+  bool   success = 1;
+  string message = 2;
+}
+
+message CheckStockThresholdRequest {
+  string book_title = 1;
+}
+
+message CheckStockThresholdResponse {
+  bool   success = 1;
+  string message = 2;
+  bool is_below = 3;
+}
+
+message PrepareRequest {
+  string order_id = 1; // 订单 ID
+  repeated BookUpdate updates = 2; // 库存更新列表
+}
+
+message BookUpdate {
+  string book_title = 1;
+  int32 quantity = 2;
+}
+
+message PrepareResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message CommitRequest {
+  string order_id = 1;
+}
+
+message CommitResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message AbortRequest {
+  string order_id = 1;
+}
+
+message AbortResponse {
+  bool success = 1;
+  string message = 2;
+}

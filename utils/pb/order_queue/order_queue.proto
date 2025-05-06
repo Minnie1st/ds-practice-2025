@@ -16,6 +16,7 @@ message EnqueueRequest {
 message Item {
     string name = 1;
     int32 quantity = 2;
+    float price = 3;
 }
 
 message EnqueueResponse {

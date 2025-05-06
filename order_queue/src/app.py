@@ -68,7 +68,12 @@ class PriorityOrderQueue:
         item_score = num_items * 10  # 10 points per book
 
         # Factor 2: Shipping method
-        shipping_score = 50 if shipping_method == "express" else 0  # 快递加 50 分
+        if shipping_method == "Next-Day":
+            shipping_score = 100
+        elif shipping_method == "Express":
+            shipping_score = 50
+        else:
+            shipping_score = 0  # 默认 standard 不加分
 
         # Factor 3: Waiting time (in seconds since enqueue)
         current_time = time.time()
@@ -80,7 +85,7 @@ class PriorityOrderQueue:
 
         # Total priority
         priority = item_score + shipping_score + waiting_score + ai_score
-        logger.info(f"Priority details: items={num_items}, shipping={shipping_score}, ai={ai_score}")
+        logger.info(f"Priority details: item={item_score}, shipping={shipping_score}, waiting={waiting_score}, ai={ai_score}")
         
         return priority
 

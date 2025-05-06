@@ -35,73 +35,117 @@ services:
       # Mount the orchestrator/src directory in the current directory to the /app/orchestrator/src directory in the container
       - ./orchestrator/src:/app/orchestrator/src
     depends_on:
-      - fraud_detection
-      - transaction_verification
-      - suggestions
+      # - fraud_detection
+      # - transaction_verification
+      # - suggestions
       - order_queue
     networks:
     - app-network  
 
-  fraud_detection:
-    build:
-      # Use the current directory as the build context
-      # This allows us to access the files in the current directory inside the Dockerfile
-      context: ./
-      # Use the Dockerfile in the fraud_detection directorys
-      dockerfile: ./fraud_detection/Dockerfile
-    ports:
-      # Expose port 50051 on the host, and map port 50051 of the container to port 50051 on the host
-      - 50051:50051
-    environment:
-      # Pass the environment variables to the container
-      # The PYTHONUNBUFFERED environment variable ensures that the output from the application is logged to the console
-      - PYTHONUNBUFFERED=TRUE
-      # The PYTHONFILE environment variable specifies the absolute entry point of the application
-      # Check app.py in the fraud_detection directory to see how this is used
-      - PYTHONFILE=/app/fraud_detection/src/app.py
-    volumes:
-      # Mount the utils directory in the current directory to the /app/utils directory in the container
-      - ./utils:/app/utils
-      # Mount the fraud_detection/src directory in the current directory to the /app/fraud_detection/src directory in the container
-      - ./fraud_detection/src:/app/fraud_detection/src
-      - ./fraud_detection/.env:/app/fraud_detection/.env
-    env_file:
-      - ./fraud_detection/.env
-    networks:
-    - app-network  
-  
-  transaction_verification:
-    build:
-      context: ./
-      dockerfile: ./transaction_verification/Dockerfile
-    ports:
-      - "50052:50052"  # 映射到任务要求的端口 50052
-    environment:
-      - PYTHONUNBUFFERED=TRUE
-      - PYTHONFILE=/app/transaction_verification/src/app.py
-    volumes:
-      - ./utils:/app/utils
-      - ./transaction_verification/src:/app/transaction_verification/src
-    networks:
-    - app-network  
 
-  suggestions:
+  database_1:
     build:
-      context: ./
-      dockerfile: ./suggestions/Dockerfile
-    ports:
-      - "50053:50053"  # 映射到任务要求的端口 50053
+      context: .  
+      dockerfile: ./database/Dockerfile
     environment:
       - PYTHONUNBUFFERED=TRUE
-      - PYTHONFILE=/app/suggestions/src/app.py
-    volumes:
-      - ./utils:/app/utils
-      - ./suggestions/src:/app/suggestions/src
-      - ./suggestions/.env:/app/suggestions/.env
-    env_file:
-      - ./suggestions/.env
+      - PYTHONFILE=/app/database/src/app.py
+      - REPLICA_ID=1
+      - PORT=50061
+    ports:
+      - "50061:50061"
     networks:
-    - app-network  
+      - app-network
+
+  database_2:
+    build:
+      context: .  
+      dockerfile: ./database/Dockerfile
+    environment:
+      - PYTHONUNBUFFERED=TRUE
+      - PYTHONFILE=/app/database/src/app.py
+      - REPLICA_ID=2
+      - PORT=50062
+    ports:
+      - "50062:50062"
+    networks:
+      - app-network
+
+  database_3:
+    build:
+      context: .  
+      dockerfile: ./database/Dockerfile
+    environment:
+      - PYTHONUNBUFFERED=TRUE
+      - PYTHONFILE=/app/database/src/app.py
+      - REPLICA_ID=3
+      - PORT=50063
+    ports:
+      - "50063:50063"
+    networks:
+      - app-network
+
+
+  # fraud_detection:
+  #   build:
+  #     # Use the current directory as the build context
+  #     # This allows us to access the files in the current directory inside the Dockerfile
+  #     context: ./
+  #     # Use the Dockerfile in the fraud_detection directorys
+  #     dockerfile: ./fraud_detection/Dockerfile
+  #   ports:
+  #     # Expose port 50051 on the host, and map port 50051 of the container to port 50051 on the host
+  #     - 50051:50051
+  #   environment:
+  #     # Pass the environment variables to the container
+  #     # The PYTHONUNBUFFERED environment variable ensures that the output from the application is logged to the console
+  #     - PYTHONUNBUFFERED=TRUE
+  #     # The PYTHONFILE environment variable specifies the absolute entry point of the application
+  #     # Check app.py in the fraud_detection directory to see how this is used
+  #     - PYTHONFILE=/app/fraud_detection/src/app.py
+  #   volumes:
+  #     # Mount the utils directory in the current directory to the /app/utils directory in the container
+  #     - ./utils:/app/utils
+  #     # Mount the fraud_detection/src directory in the current directory to the /app/fraud_detection/src directory in the container
+  #     - ./fraud_detection/src:/app/fraud_detection/src
+  #     - ./fraud_detection/.env:/app/fraud_detection/.env
+  #   env_file:
+  #     - ./fraud_detection/.env
+  #   networks:
+  #   - app-network  
+  
+  # transaction_verification:
+  #   build:
+  #     context: ./
+  #     dockerfile: ./transaction_verification/Dockerfile
+  #   ports:
+  #     - "50052:50052"  # 映射到任务要求的端口 50052
+  #   environment:
+  #     - PYTHONUNBUFFERED=TRUE
+  #     - PYTHONFILE=/app/transaction_verification/src/app.py
+  #   volumes:
+  #     - ./utils:/app/utils
+  #     - ./transaction_verification/src:/app/transaction_verification/src
+  #   networks:
+  #   - app-network  
+
+  # suggestions:
+  #   build:
+  #     context: ./
+  #     dockerfile: ./suggestions/Dockerfile
+  #   ports:
+  #     - "50053:50053"  # 映射到任务要求的端口 50053
+  #   environment:
+  #     - PYTHONUNBUFFERED=TRUE
+  #     - PYTHONFILE=/app/suggestions/src/app.py
+  #   volumes:
+  #     - ./utils:/app/utils
+  #     - ./suggestions/src:/app/suggestions/src
+  #     - ./suggestions/.env:/app/suggestions/.env
+  #   env_file:
+  #     - ./suggestions/.env
+  #   networks:
+  #   - app-network  
 
   order_queue:
     build:
@@ -175,6 +219,17 @@ services:
       - PORT=50058
     ports:
       - "50058:50058"
+    networks:
+      - app-network
+
+  payment_service:
+    build:
+      context: .
+      dockerfile: payment_service/Dockerfile
+    environment:
+      - PORT=50064
+    ports:
+      - "50064:50064"
     networks:
       - app-network
 

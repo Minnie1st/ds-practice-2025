@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package payment_service;
+
+// Payment Service 定义
+service PaymentService {
+    // 准备阶段：模拟支付准备
+    rpc Prepare (PrepareRequest) returns (PrepareResponse);
+
+    // 提交阶段：执行支付
+    rpc Commit (CommitRequest) returns (CommitResponse);
+
+    // 回滚阶段：取消支付
+    rpc Abort (AbortRequest) returns (AbortResponse);
+}
+
+// 准备请求
+message PrepareRequest {
+    string order_id = 1; // 订单 ID
+    double amount = 2;   // 支付金额
+}
+
+// 准备响应
+message PrepareResponse {
+    bool success = 1;    // 是否准备成功
+    string message = 2;  // 成功或错误消息
+}
+
+// 提交请求
+message CommitRequest {
+    string order_id = 1; // 订单 ID
+}
+
+// 提交响应
+message CommitResponse {
+    bool success = 1;    // 是否提交成功
+    string message = 2;  // 成功或错误消息
+}
+
+// 回滚请求
+message AbortRequest {
+    string order_id = 1; // 订单 ID
+}
+
+// 回滚响应
+message AbortResponse {
+    bool success = 1;    // 是否回滚成功
+    string message = 2;  // 成功或错误消息
+}
