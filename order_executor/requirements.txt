@@ -5,3 +5,7 @@ watchdog==6.0.0
 python-dotenv
 google-generativeai
 tenacity==8.2.3 
+opentelemetry-api==1.22.0
+opentelemetry-sdk==1.22.0
+opentelemetry-exporter-otlp-proto-http==1.22.0
+psutil==5.9.8

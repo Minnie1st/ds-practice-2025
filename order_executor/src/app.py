@@ -8,6 +8,7 @@ import sys
 import heapq
 import random
 import json
+import psutil
 
 # 设置 gRPC 相关路径
 FILE = __file__ if '__file__' in globals() else os.getenv("PYTHONFILE", "")
@@ -32,6 +33,32 @@ import payment_service_pb2_grpc
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# OpenTelemetry 配置
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry import metrics
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
+from opentelemetry.sdk.resources import SERVICE_NAME, Resource
+
+resource = Resource.create(attributes={
+    SERVICE_NAME: "order_executor"
+})
+
+tracer_provider = TracerProvider(resource=resource)
+span_processor = BatchSpanProcessor(OTLPSpanExporter(endpoint="http://observability:4318/v1/traces"))
+tracer_provider.add_span_processor(span_processor)
+trace.set_tracer_provider(tracer_provider)
+
+metric_reader = PeriodicExportingMetricReader(
+    OTLPMetricExporter(endpoint="http://observability:4318/v1/metrics")
+)
+meter_provider = MeterProvider(resource=resource, metric_readers=[metric_reader])
+metrics.set_meter_provider(meter_provider)
 
 REPLICA_ID = int(os.getenv('REPLICA_ID', '1'))
 PORT = int(os.getenv('PORT', '50055'))
@@ -124,6 +151,148 @@ transaction_state = TransactionState()
     - Supports coordinator failure recovery by restoring unfinished transactions from the transaction log.
 """
 class OrderExecutorService(order_executor_pb2_grpc.OrderExecutorServicer):
+    # 获取 Tracer 和 Meter
+    tracer = trace.get_tracer(__name__)
+    meter = metrics.get_meter(__name__)
+
+    # 指标定义
+    order_counter = meter.create_counter(
+        name="order_executor.order_count",
+        description="Total number of processed orders",
+        unit="1"
+    )
+
+    active_transactions = meter.create_up_down_counter(
+        name="order_executor.active_transactions",
+        description="Number of active transactions",
+        unit="1"
+    )
+
+    order_duration = meter.create_histogram(
+        name="order_executor.order_duration",
+        description="Duration of order processing",
+        unit="ms"
+    )
+
+    def __init__(self):
+        # 定义内存使用率的 ObservableGauge
+        self.memory_usage_value = psutil.virtual_memory().percent  # 初始值
+        self.meter.create_observable_gauge(
+            name="order_executor.memory_usage",
+            description="Memory usage percentage",
+            unit="%",
+            callbacks=[self.memory_usage_callback]
+        )
+        # 在独立线程中更新内存使用率
+        self.memory_thread = threading.Thread(target=self._run_memory_gauge, daemon=True)
+        self.memory_thread.start()
+
+    def memory_usage_callback(self, options):
+        return [metrics.Observation(value=self.memory_usage_value)]
+
+    def _run_memory_gauge(self):
+        while True:
+            self.memory_usage_value = psutil.virtual_memory().percent  # 更新值
+            time.sleep(5)  # 每 5 秒更新一次
+
+    def process_order(self, order):
+        """
+        Process orders using 2PC to coordinate the database and payment service.
+        - Phase 1 (Prepare): Check stock and prepare both the database and payment service.
+        - Phase 2 (Commit): If Prepare succeeds, commit the transaction; otherwise, abort it.
+        - Use TransactionState to record the transaction status and support failure recovery.
+        """
+        order_id = order.order_id
+        items = order.items
+        total_amount = sum(item.quantity * item.price for item in items)
+
+        start_time = time.time()
+        with self.tracer.start_as_current_span(f"process_order_{order_id}") as span:
+            span.set_attribute("order.id", order_id)
+            span.set_attribute("order.total_amount", total_amount)
+
+            # 检查库存（非 2PC，直接读取）
+            for item in items:
+                book_title = item.name
+                quantity = item.quantity
+                try:
+                    read_response = db_stub.Read(database_pb2.ReadRequest(book_title=book_title))
+                    if not read_response.success or read_response.stock < quantity:
+                        logger.error(f"Order {order_id} failed: insufficient stock for {book_title}")
+                        span.set_status(trace.Status(trace.StatusCode.ERROR, "Insufficient stock"))
+                        return False
+                except grpc.RpcError as e:
+                    logger.error(f"Read error for {book_title}: {e}")
+                    span.set_status(trace.Status(trace.StatusCode.ERROR, str(e)))
+                    return False
+
+            # 2PC Phase 1: Prepare
+            updates = [(item.name, item.quantity) for item in items]
+            with transaction_state.lock:
+                self.active_transactions.add(1)  # 增加活动事务数
+            transaction_state.add_transaction(order_id=order_id, state="PREPARING", updates=updates, amount=total_amount)
+
+            with self.tracer.start_as_current_span(f"prepare_phase_{order_id}") as prepare_span:
+                try:
+                    db_prepare = db_stub.Prepare(database_pb2.PrepareRequest(
+                        order_id=order_id,
+                        updates=[database_pb2.BookUpdate(book_title=name, quantity=qty) for name, qty in updates]
+                    ), timeout=10)
+                    if not db_prepare.success:
+                        transaction_state.remove_transaction(order_id)
+                        logger.error(f"Order {order_id} failed: database prepare failed - {db_prepare.message}")
+                        prepare_span.set_status(trace.Status(trace.StatusCode.ERROR, db_prepare.message))
+                        with transaction_state.lock:
+                            self.active_transactions.add(-1)  # 减少活动事务数
+                        return False
+                    logger.info(f"Order {order_id}: Database prepared successfully")
+                    payment_prepare = payment_stub.Prepare(payment_service_pb2.PrepareRequest(
+                        order_id=order_id,
+                        amount=total_amount
+                    ))
+                    if not payment_prepare.success:
+                        db_stub.Abort(database_pb2.AbortRequest(order_id=order_id))
+                        transaction_state.remove_transaction(order_id)
+                        logger.error(f"Order {order_id} failed: payment prepare failed - {payment_prepare.message}")
+                        prepare_span.set_status(trace.Status(trace.StatusCode.ERROR, payment_prepare.message))
+                        with transaction_state.lock:
+                            self.active_transactions.add(-1)  # 减少活动事务数
+                        return False
+
+                except grpc.RpcError as e:
+                    db_stub.Abort(database_pb2.AbortRequest(order_id=order_id))
+                    transaction_state.remove_transaction(order_id)
+                    logger.error(f"Order {order_id} failed due to gRPC error: {e}")
+                    prepare_span.set_status(trace.Status(trace.StatusCode.ERROR, str(e)))
+                    with transaction_state.lock:
+                        self.active_transactions.add(-1)  # 减少活动事务数
+                    return False
+
+            # 2PC Phase 2: Commit
+            transaction_state.update_transaction_state(order_id, "COMMITTING")
+
+            db_commit = db_stub.Commit(database_pb2.CommitRequest(order_id=order_id))
+            payment_commit = payment_stub.Commit(payment_service_pb2.CommitRequest(order_id=order_id))
+
+            if db_commit.success and payment_commit.success:
+                transaction_state.remove_transaction(order_id)
+                logger.info(f"Order {order_id} processed successfully")
+                span.set_status(trace.Status(trace.StatusCode.OK))
+                with transaction_state.lock:
+                    self.active_transactions.add(-1)  # 减少活动事务数
+                self.order_counter.add(1)  # 增加订单计数
+                self.order_duration.record((time.time() - start_time) * 1000)  # 记录处理时间（毫秒）
+                return True
+            else:
+                db_stub.Abort(database_pb2.AbortRequest(order_id=order_id))
+                payment_stub.Abort(payment_service_pb2.AbortRequest(order_id=order_id))
+                transaction_state.remove_transaction(order_id)
+                logger.error(f"Order {order_id} failed during commit")
+                span.set_status(trace.Status(trace.StatusCode.ERROR, "Commit failed"))
+                with transaction_state.lock:
+                    self.active_transactions.add(-1)  # 减少活动事务数
+                return False
+
     def Ping(self, request, context):
         with leader_state.lock:
             logger.info(f"Received Ping request at Replica {REPLICA_ID}")
@@ -228,86 +397,6 @@ def monitor_leader():
                 run_election()
         time.sleep(HEARTBEAT_TIMEOUT / 2)
 
-
-"""
-    Process orders using 2PC to coordinate the database and payment service.
-    - Phase 1 (Prepare): Check stock and prepare both the database and payment service.
-    - Phase 2 (Commit): If Prepare succeeds, commit the transaction; otherwise, abort it.
-    - Use TransactionState to record the transaction status and support failure recovery.
-"""
-def process_order(order):
-    """处理订单，使用 2PC 协调数据库和支付服务"""
-    order_id = order.order_id
-    items = order.items
-    total_amount = sum(item.quantity * item.price for item in items)
-
-    # 检查库存（非 2PC，直接读取）
-    for item in items:
-        book_title = item.name
-        quantity = item.quantity
-        try:
-            read_response = db_stub.Read(database_pb2.ReadRequest(book_title=book_title))
-            if not read_response.success or read_response.stock < quantity:
-                logger.error(f"Order {order_id} failed: insufficient stock for {book_title}")
-                return False
-        except grpc.RpcError as e:
-            logger.error(f"Read error for {book_title}: {e}")
-            return False
-
-    # 2PC Phase 1: Prepare
-    updates = [(item.name, item.quantity) for item in items]
-    transaction_state.add_transaction(
-        order_id=order_id,
-        state="PREPARING",
-        updates=updates,
-        amount=total_amount
-    )
-
-    try:
-        db_prepare = db_stub.Prepare(database_pb2.PrepareRequest(
-            order_id=order_id,
-            updates=[database_pb2.BookUpdate(book_title=name, quantity=qty) for name, qty in updates]
-        ), timeout=10)
-        if not db_prepare.success:
-            transaction_state.remove_transaction(order_id)
-            logger.error(f"Order {order_id} failed: database prepare failed - {db_prepare.message}")
-            return False
-        logger.info(f"Order {order_id}: Database prepared successfully")
-        # 2PC Phase 1: Prepare payment
-        payment_prepare = payment_stub.Prepare(payment_service_pb2.PrepareRequest(
-            order_id=order_id,
-            amount=total_amount
-        ))
-        if not payment_prepare.success:
-            db_stub.Abort(database_pb2.AbortRequest(order_id=order_id))
-            transaction_state.remove_transaction(order_id)
-            logger.error(f"Order {order_id} failed: payment prepare failed - {payment_prepare.message}")
-            return False
-
-        # 2PC Phase 2: Commit
-        transaction_state.update_transaction_state(order_id, "COMMITTING")
-
-        db_commit = db_stub.Commit(database_pb2.CommitRequest(order_id=order_id))
-        payment_commit = payment_stub.Commit(payment_service_pb2.CommitRequest(order_id=order_id))
-
-        if db_commit.success and payment_commit.success:
-            transaction_state.remove_transaction(order_id)
-            logger.info(f"Order {order_id} processed successfully")
-            return True
-        else:
-            db_stub.Abort(database_pb2.AbortRequest(order_id=order_id))
-            payment_stub.Abort(payment_service_pb2.AbortRequest(order_id=order_id))
-            transaction_state.remove_transaction(order_id)
-            logger.error(f"Order {order_id} failed during commit")
-            return False
-
-    except grpc.RpcError as e:
-        db_stub.Abort(database_pb2.AbortRequest(order_id=order_id))
-        payment_stub.Abort(payment_service_pb2.AbortRequest(order_id=order_id))
-        transaction_state.remove_transaction(order_id)
-        logger.error(f"Order {order_id} failed due to gRPC error: {e}")
-        return False
-
 def recover_transactions():
     """恢复未完成的事务"""
     with transaction_state.lock:
@@ -338,7 +427,7 @@ def recover_transactions():
                     logger.error(f"Failed to recover transaction {order_id}: {e}")
                     transaction_state.remove_transaction(order_id)
 
-def process_orders():
+def process_orders(service):
     """从队列获取订单并处理"""
     # 等待队列服务就绪
     for attempt in range(5):
@@ -361,7 +450,7 @@ def process_orders():
                 response = queue_stub.Dequeue(order_queue_pb2.DequeueRequest(), timeout=5)
                 if response.success:
                     logger.info(f"Dequeued order {response.order_id}")
-                    process_order(response)
+                    service.process_order(response)
                 else:
                     time.sleep(0.1)  # 队列为空，短暂等待
             except grpc.RpcError as e:
@@ -372,7 +461,8 @@ def process_orders():
 
 def serve():
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=20))
-    order_executor_pb2_grpc.add_OrderExecutorServicer_to_server(OrderExecutorService(), server)
+    service = OrderExecutorService()
+    order_executor_pb2_grpc.add_OrderExecutorServicer_to_server(service, server)
     server.add_insecure_port(f'[::]:{PORT}')
     logger.info(f"Starting order executor replica {REPLICA_ID} on port {PORT}")
     server.start()
@@ -382,7 +472,7 @@ def serve():
     time.sleep(random.uniform(0, 2))
     threading.Thread(target=run_election, daemon=True).start()
     threading.Thread(target=monitor_leader, daemon=True).start()
-    threading.Thread(target=process_orders, daemon=True).start()
+    threading.Thread(target=process_orders, args=(service,), daemon=True).start()
     
     server.wait_for_termination()
 

@@ -4,3 +4,6 @@ protobuf==4.25.2
 watchdog==6.0.0
 python-dotenv
 google-generativeai
+opentelemetry-api==1.24.0
+opentelemetry-sdk==1.24.0
+opentelemetry-exporter-otlp-proto-grpc==1.24.0

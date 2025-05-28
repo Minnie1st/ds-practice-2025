@@ -13,8 +13,10 @@ import database_pb2_grpc
 with grpc.insecure_channel('localhost:50061') as channel:
     stub = database_pb2_grpc.BooksDatabaseStub(channel)
     books = [
-        ("Book A", 10, 10.99, 5),
-        ("Book B", 5, 15.99, 2)
+        ("Book A", 10,20,5),
+        ("Book B", 5,10,2),
+        ("Book C", 10,20,5),
+        ("Book D", 1,10,1)
     ]
     for title, stock, price, threshold in books:
         stub.Write(database_pb2.WriteRequest(

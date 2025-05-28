@@ -10,3 +10,11 @@ protobuf==4.25.2
 Werkzeug==3.0.1
 Flask-CORS==4.0.0
 watchdog==6.0.0
+opentelemetry-api
+opentelemetry-exporter-otlp
+opentelemetry-exporter-otlp-proto-http
+opentelemetry-instrumentation
+opentelemetry-instrumentation-flask
+opentelemetry-instrumentation-grpc
+psutil==5.8.0
+opentelemetry-sdk>=1.12.0

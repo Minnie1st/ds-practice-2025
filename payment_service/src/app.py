@@ -5,6 +5,16 @@ from concurrent import futures
 import threading
 import json
 import logging
+import time
+from opentelemetry import trace, metrics
+from opentelemetry.sdk.resources import SERVICE_NAME, Resource
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+from opentelemetry.metrics import Observation
 
 # 设置 gRPC 路径
 FILE = __file__ if '__file__' in globals() else os.getenv("PYTHONFILE", "")
@@ -18,25 +28,81 @@ import payment_service_pb2_grpc
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-"""
-    Implementation of the Payment Service, acting as a participant in the 2PC protocol.
-    - Supports Prepare/Commit/Abort operations to coordinate order payments.
-    - Uses a log file (payment_log.json) to persist pending payments and support failure recovery.
-    - Provides a simulated failure trigger (order_payment_fail_trigger) for testing purposes.
-"""
+# 配置 OpenTelemetry
+resource = Resource.create(attributes={SERVICE_NAME: "payment-service"})
+
+# 配置追踪
+tracer_provider = TracerProvider(resource=resource)
+trace_processor = BatchSpanProcessor(OTLPSpanExporter(endpoint="http://observability:4318/v1/traces"))
+tracer_provider.add_span_processor(trace_processor)
+trace.set_tracer_provider(tracer_provider)
+tracer = trace.get_tracer(__name__)
+
+# 配置指标
+metric_reader = PeriodicExportingMetricReader(
+    OTLPMetricExporter(endpoint="http://observability:4318/v1/metrics")
+)
+meter_provider = MeterProvider(resource=resource, metric_readers=[metric_reader])
+metrics.set_meter_provider(meter_provider)
+meter = metrics.get_meter(__name__)
+
 class PaymentServiceServicer(payment_service_pb2_grpc.PaymentServiceServicer):
+    # 类属性：共享的指标对象
+    _meter = meter
+
+    @classmethod
+    def init_metrics(cls):
+        """初始化指标（只调用一次）"""
+        cls.prepare_counter = cls._meter.create_counter(
+            name="payment_prepare_requests_total",
+            description="Total number of Prepare requests",
+            unit="1"
+        )
+        cls.commit_counter = cls._meter.create_counter(
+            name="payment_commit_requests_total",
+            description="Total number of Commit requests",
+            unit="1"
+        )
+        cls.active_sessions = cls._meter.create_up_down_counter(
+            name="active_payment_sessions",
+            description="Number of active payment sessions",
+            unit="1"
+        )
+        cls.prepare_latency_histogram = cls._meter.create_histogram(
+            name="payment_prepare_latency_seconds",
+            description="Latency of Prepare requests in seconds",
+            unit="s"
+        )
+        cls.error_counter = cls._meter.create_counter(
+            name="payment_errors_total",
+            description="Total number of errors in payment operations",
+            unit="1"
+        )
+        cls.pending_payments_gauge = cls._meter.create_observable_gauge(
+            name="pending_payments_count",
+            description="Number of pending payments",
+            unit="1",
+            callbacks=[cls.pending_payments_callback]
+        )
+
+    @classmethod
+    def pending_payments_callback(cls, options):
+        """回调函数，用于 ObservableGauge，访问全局实例的 pending_payments"""
+        return [Observation(value=len(cls._instance.pending_payments), attributes={})]
+
     def __init__(self):
-        # 待处理支付：{order_id: amount}
         self.pending_payments = {}
-        # 本地锁，确保线程安全
         self.lock = threading.Lock()
-        # 日志文件，用于故障恢复
         self.log_file = "payment_log.json"
+        # 初始化指标（仅在第一次实例化时调用）
+        if not hasattr(self.__class__, 'prepare_counter'):
+            self.__class__.init_metrics()
+        # 存储全局实例以供回调使用
+        self.__class__._instance = self
         self._load_log()
         logger.info("Payment service initialized")
 
     def _load_log(self):
-        """加载日志，恢复未完成支付"""
         if os.path.exists(self.log_file):
             try:
                 with open(self.log_file, "r") as f:
@@ -44,75 +110,76 @@ class PaymentServiceServicer(payment_service_pb2_grpc.PaymentServiceServicer):
                 logger.info(f"Loaded log from {self.log_file}")
             except Exception as e:
                 logger.error(f"Failed to load log: {e}")
+                self.__class__.error_counter.add(1, {"operation": "load_log"})
 
     def _save_log(self):
-        """保存待处理支付到日志"""
         try:
             with open(self.log_file, "w") as f:
                 json.dump(self.pending_payments, f)
             logger.info(f"Saved log to {self.log_file}")
         except Exception as e:
             logger.error(f"Failed to save log: {e}")
+            self.__class__.error_counter.add(1, {"operation": "save_log"})
 
-        """
-    2PC Prepare Phase: Record the payment operation.
-    - Check if the order_id matches the simulated failure trigger.
-    - Record the payment amount in pending_payments and write it to the log.
-    - Return a success or simulated failure response.
-        """
     def Prepare(self, request, context):
-        """2PC 准备阶段：记录支付操作"""
-        order_id = request.order_id
-        amount = request.amount
-        # 检查特定订单 ID 以模拟失败
-        if order_id == "order_payment_fail_trigger":
-            logger.error(f"Prepare failed for order {order_id}: simulated failure")
-            return payment_service_pb2.PrepareResponse(success=False, message="Simulated failure")
-        with self.lock:
-            # 模拟检查账户余额（总是成功）
-            self.pending_payments[order_id] = amount
-            self._save_log()
-            logger.info(f"Prepared payment for order {order_id}: amount={amount}")
-            return payment_service_pb2.PrepareResponse(
-                success=True,
-                message="Payment prepared"
-            )
+        with tracer.start_as_current_span("Prepare") as span:
+            span.set_attribute("order_id", request.order_id)
+            span.set_attribute("amount", request.amount)
+            start_time = time.time()
+
+            order_id = request.order_id
+            amount = request.amount
+            if order_id == "order_payment_fail_trigger":
+                logger.error(f"Prepare failed for order {order_id}: simulated failure")
+                self.__class__.error_counter.add(1, {"operation": "prepare"})
+                span.set_attribute("error", True)
+                return payment_service_pb2.PrepareResponse(success=False, message="Simulated failure")
+
+            with self.lock:
+                self.pending_payments[order_id] = amount
+                self._save_log()
+                logger.info(f"Prepared payment for order {order_id}: amount={amount}")
+                self.__class__.prepare_counter.add(1, {"status": "success"})
+                self.__class__.active_sessions.add(1, {"status": "success"})
+                self.__class__.prepare_latency_histogram.record(time.time() - start_time)
+                span.set_attribute("status", "success")
+                return payment_service_pb2.PrepareResponse(success=True, message="Payment prepared")
 
     def Commit(self, request, context):
-        """2PC 提交阶段：确认支付"""
-        order_id = request.order_id
-        with self.lock:
-            if order_id in self.pending_payments:
-                # 模拟支付执行（确认支付）
-                amount = self.pending_payments[order_id]
-                del self.pending_payments[order_id]
-                self._save_log()
-                logger.info(f"Committed payment for order {order_id}: amount={amount}")
-                return payment_service_pb2.CommitResponse(
-                    success=True,
-                    message="Payment committed"
-                )
-            logger.warning(f"Commit failed: no pending payment for {order_id}")
-            return payment_service_pb2.CommitResponse(
-                success=False,
-                message="No pending payment"
-            )
+        with tracer.start_as_current_span("Commit") as span:
+            span.set_attribute("order_id", request.order_id)
+            order_id = request.order_id
+            with self.lock:
+                if order_id in self.pending_payments:
+                    amount = self.pending_payments[order_id]
+                    del self.pending_payments[order_id]
+                    self._save_log()
+                    logger.info(f"Committed payment for order {order_id}: amount={amount}")
+                    self.__class__.commit_counter.add(1, {"status": "success"})
+                    self.__class__.active_sessions.add(-1, {"status": "success"})
+                    span.set_attribute("status", "success")
+                    return payment_service_pb2.CommitResponse(success=True, message="Payment committed")
+                logger.warning(f"Commit failed: no pending payment for {order_id}")
+                self.__class__.error_counter.add(1, {"operation": "commit"})
+                span.set_attribute("error", True)
+                return payment_service_pb2.CommitResponse(success=False, message="No pending payment")
 
     def Abort(self, request, context):
-        """2PC 中止阶段：取消支付"""
-        order_id = request.order_id
-        with self.lock:
-            if order_id in self.pending_payments:
-                del self.pending_payments[order_id]
-                self._save_log()
-            logger.info(f"Aborted payment for order {order_id}")
-            return payment_service_pb2.AbortResponse(
-                success=True,
-                message="Payment aborted"
-            )
+        with tracer.start_as_current_span("Abort") as span:
+            span.set_attribute("order_id", request.order_id)
+            order_id = request.order_id
+            with self.lock:
+                if order_id in self.pending_payments:
+                    del self.pending_payments[order_id]
+                    self._save_log()
+                logger.info(f"Aborted payment for order {order_id}")
+                self.__class__.active_sessions.add(-1, {"status": "success"})
+                span.set_attribute("status", "success")
+                return payment_service_pb2.AbortResponse(success=True, message="Payment aborted")
+
+payment_service = PaymentServiceServicer()  # 全局实例
 
 def serve(port):
-    """启动 gRPC 服务器"""
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
     payment_service_pb2_grpc.add_PaymentServiceServicer_to_server(PaymentServiceServicer(), server)
     server.add_insecure_port(f"[::]:{port}")
